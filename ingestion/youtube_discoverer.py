@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
+import datetime
 
 # Load API key
 load_dotenv()
@@ -11,9 +12,26 @@ YOUTUBE_API_VERSION = "v3"
 # Keywords that suggest virality
 #use open ai to find the most popular key words at a given time **
 VIRAL_KEYWORDS = [
-    "funniest", "insane", "rage", "rant", "roast", "explosive",
-    "fails", "awkward", "called out", "drama", "craziest"
+    "funniest", "crazy moments", "podcast clips", "angry reaction", "public freakout",
+    "interview gone wrong", "thrilling stunt", "argument", "celebrity meltdown"
 ]
+
+UNWANTED_KEYWORDS = [
+    "music", "official video", "lyric", "album", "feat", "ft.", "remix",
+    "instrumental", "cover", "song", "dj", "mv"
+]
+
+DESIRABLE_KEYWORDS = [
+    "podcast", "interview", "debate", "reaction", "meltdown",
+    "freakout", "fails", "argument", "stunt", "rant", "roast"
+]
+
+def keyword_score(title: str) -> int:
+    lowered = title.lower()
+    bad_hits = any(bad in lowered for bad in UNWANTED_KEYWORDS)
+    good_hits = sum(good in lowered for good in DESIRABLE_KEYWORDS)
+    return -1 if bad_hits else good_hits
+
 
 def search_youtube(keyword, max_results=5):
     youtube = build(
@@ -53,31 +71,59 @@ def fetch_video_metadata(video_id):
 def discover_viral_candidates():
     candidates = []
     for keyword in VIRAL_KEYWORDS:
-        print(f"\n Searching: {keyword}")
+        print(f"\n🔍 Searching: {keyword}")
         results = search_youtube(keyword)
-        #searching for 5 videos related to keyword we specify and then looping through them
+
         for item in results:
-            #getting all video data to sort through to rank
             vid = item["id"]["videoId"]
             meta = fetch_video_metadata(vid)
             stats = meta["statistics"]
-            title = meta["snippet"]["title"]
+            snippet = meta["snippet"]
+
+            title = snippet["title"]
+            channel = snippet["channelTitle"].lower()
+            published = snippet.get("publishedAt", "")
 
             views = int(stats.get("viewCount", 0))
-            likes = int(stats.get("likeCount", 1))  # avoid div-by-zero
+            likes = int(stats.get("likeCount", 1))
             ratio = likes / max(1, views)
+            desirability = keyword_score(title)
 
-            print(f"\n VIDEO: {title} has a ratio of: {ratio}")
-            # Simple filters
-            if views > 10000 and ratio > 0.01:
-                candidates.append({
-                    "video_id": vid,
-                    "title": title,
-                    "views": views,
-                    "like_ratio": ratio,
-                    "url": f"https://www.youtube.com/watch?v={vid}"
-                })
-    #this will be full of videos that are "popular"
+            if desirability == -1:
+                print(f"🚫 Skipping music/irrelevant: {title}")
+                continue
+
+            try:
+                published_date = datetime.datetime.fromisoformat(published.replace("Z", "+00:00"))
+                days_old = (datetime.datetime.utcnow() - published_date).days
+            except Exception:
+                days_old = 999  # fallback if date is malformed
+
+            score = (
+                (views / 1_000) +
+                (ratio * 100) +
+                (desirability * 5) -
+                (0.1 * days_old)
+            )
+
+            if score < 20:
+                continue
+
+            print(f"✅ Candidate: {title} | Score: {score:.2f}")
+
+            candidates.append({
+                "video_id": vid,
+                "title": title,
+                "channel": channel,
+                "views": views,
+                "like_ratio": ratio,
+                "desirability": desirability,
+                "published_days_ago": days_old,
+                "score": score,
+                "url": f"https://www.youtube.com/watch?v={vid}"
+            })
+
+    candidates.sort(key=lambda c: c["score"], reverse=True)
     return candidates
 
 if __name__ == "__main__":
