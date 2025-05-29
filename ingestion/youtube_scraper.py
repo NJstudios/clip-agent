@@ -10,7 +10,7 @@ def extract_video_id(url:str) -> str:
     params = parse_qs(query)
     return params.get("v", [None])[0] or url.split("/")[-1]
 
-def download_youtube_video(url: str, output_dir:"data/raw") -> dict:
+def download_youtube_video(url: str, output_dir: Path) -> dict:
     video_id = extract_video_id(url)
     if not video_id:
         raise ValueError("Invalid Video Url")
